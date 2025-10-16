@@ -17,7 +17,7 @@ docker run -d -p 80:80 --name docker-tutorial docker101tutorial
 ### Step 4: Tag Image
 DOCKER_USER=nahyung4
 docker tag docker101tutorial $DOCKER_USER/docker101tutorial:v1
-### Exercise 1 – Task 4 – Step 5: Push Image to Docker Hub
+### Step 5: Push Image to Docker Hub
 docker login
 docker push $DOCKER_USER/docker101tutorial:v1
 ### Step 6: Verify on Docker Hub
