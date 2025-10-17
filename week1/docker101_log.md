@@ -23,4 +23,20 @@ docker push $DOCKER_USER/docker101tutorial:v1
 ### Step 6: Verify on Docker Hub
 - Repository: `nahyung4/docker101tutorial`
 - Tag: `v1` confirmed visible on Docker Hub.
-
+## Exercise 2 – Task 0: Clean Up
+docker ps -a
+docker stop docker-tutorial
+docker rm docker-tutorial
+## Exercise 2 – Task 1: BusyBox Container
+docker run -it --rm busybox
+# inside BusyBox:
+ls
+mkdir test
+whoami
+exit
+### Exercise 2 – Task 2 – Step 1: Run Nginx
+docker run -d -p 80:80 --name web nginx
+http://127.0.0.1
+### Exercise 2 – Task 2 – Step 4: Cleanup
+docker stop web
+docker rm web
