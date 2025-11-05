@@ -1,0 +1,45 @@
+services:
+  api:
+    container_name: api
+    build: ./api
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport sys, urllib.request\ntry:\n  with urllib.request.urlopen('http://localhost:8080/health', timeout=5) as r:\n    sys.exit(0 if r.status == 200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks: [frontend]
+
+  web-app:
+    container_name: web-app
+    build: ./web-app
+    env_file:
+      - .env
+    ports:
+      - "80:5000"  # host:container
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport sys, urllib.request\ntry:\n  with urllib.request.urlopen('http://localhost:5000/health', timeout=3) as r:\n    sys.exit(0 if r.status == 200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - frontend
+
+networks:
+  frontend:

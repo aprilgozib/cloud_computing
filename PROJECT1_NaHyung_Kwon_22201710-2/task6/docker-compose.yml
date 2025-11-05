@@ -1,0 +1,238 @@
+services:
+  traefik:
+    container_name: traefik
+    image: traefik:latest
+    command:
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker=true
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [frontend, backend, monitoring]
+    restart: always
+    labels:
+      - traefik.enable=true
+      # 루트(/)로 오면 /app 으로 리다이렉트
+      - traefik.http.routers.root-redirect.rule=Host(`localhost`) && Path(`/`)
+      - traefik.http.routers.root-redirect.middlewares=redirect-to-app
+      - traefik.http.middlewares.redirect-to-app.redirectregex.regex=^http://localhost/$
+      - traefik.http.middlewares.redirect-to-app.redirectregex.replacement=http://localhost/app
+
+  redis-exporter:
+    container_name: redis-exporter
+    image: oliver006/redis_exporter:alpine
+    env_file: [.env]
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9121/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [backend, monitoring]
+    restart: always
+
+  postgres-exporter:
+    container_name: postgres-exporter
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      - DATA_SOURCE_NAME=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}?sslmode=disable
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9187/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [backend, monitoring]
+    restart: always
+
+  pgweb-exporter:
+    container_name: pgweb-exporter
+    image: prom/blackbox-exporter:latest
+    volumes:
+      - ./monitoring/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9115/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [backend, monitoring]
+    restart: always
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_LOG_LEVEL=error
+      - GF_SERVER_ROOT_URL=http://localhost/grafana
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/grafana/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards
+      - ./monitoring/grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana-provisioning/datasources:/etc/grafana/provisioning/datasources
+      - grafana-data:/var/lib/grafana
+    networks: [monitoring]
+    restart: always
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.grafana.rule=Host(`localhost`) && PathPrefix(`/grafana`)
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:latest
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+      - --storage.tsdb.retention.time=200h
+      - --web.enable-lifecycle
+      - --web.external-url=http://localhost/prometheus/
+      - --web.route-prefix=/prometheus
+      - --storage.tsdb.path=/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9090/prometheus/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    volumes:
+      - prometheus-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks: [frontend, backend, monitoring]
+    restart: always
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.prometheus.rule=Host(`localhost`) && PathPrefix(`/prometheus`)
+      - traefik.http.services.prometheus.loadbalancer.server.port=9090
+
+  redis:
+    container_name: redis
+    image: redis:8-alpine
+    env_file: [.env]
+    command: ["redis-server","--requirepass","${REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks: [backend]
+
+  pgweb:
+    container_name: pgweb
+    image: sosedoff/pgweb:latest
+    env_file: [.env]
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD",  "curl", "-f", "http://localhost:8081/pgweb/api/info"] 
+      #test: ["CMD-SHELL", "wget --spider -q http://localhost:8081/pgweb/api/info || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      - DATABASE_URL=${PGWEB_DATABASE_URL}
+      - PGWEB_DATABASE_URL=${PGWEB_DATABASE_URL}
+    restart: unless-stopped
+    networks: [backend]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.pgweb.rule=Host(`localhost`) && PathPrefix(`/pgweb`)
+      - traefik.http.services.pgweb.loadbalancer.server.port=8081
+    command: ["--bind=0.0.0.0","--listen=8081","--prefix=pgweb"]
+
+  database:
+    container_name: db
+    image: postgres:18-alpine
+    env_file: [.env]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-scripts/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    restart: unless-stopped
+    networks: [backend]
+
+  api:
+    container_name: api
+    build: ./api
+    env_file: [.env]
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport sys, urllib.request\ntry:\n  with urllib.request.urlopen('http://localhost:8080/health', timeout=5) as r:\n    sys.exit(0 if r.status == 200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks: [frontend, backend]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api.rule=Host(`localhost`) && PathPrefix(`/api`)
+      - traefik.http.services.api.loadbalancer.server.port=8080
+
+  web-app:
+    container_name: web-app
+    build: ./web-app
+    env_file: [.env]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport sys, urllib.request\ntry:\n  with urllib.request.urlopen('http://localhost:5000/app/health', timeout=3) as r:\n    sys.exit(0 if r.status == 200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - frontend
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.frontend.rule=Host(`localhost`) && PathPrefix(`/app`)
+      - traefik.http.services.frontend.loadbalancer.server.port=5000
+
+networks:
+  frontend:
+  backend:
+  monitoring:
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:

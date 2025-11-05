@@ -1,0 +1,24 @@
+services:
+  web-app:
+    container_name: web-app
+    build: ./web-app
+    env_file:
+      - .env
+    ports:
+      - "80:5000"  # host:container
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python - <<'PY'\nimport sys, urllib.request\ntry:\n  with urllib.request.urlopen('http://localhost:5000/health', timeout=3) as r:\n    sys.exit(0 if r.status == 200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - frontend
+
+networks:
+  frontend:
